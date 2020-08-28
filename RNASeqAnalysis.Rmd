@@ -1,0 +1,35 @@
+---
+title: "RNAseqAnalysis"
+author: "Mhyles Hintural"
+date: "26/08/2020"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Set-up
+
+```{r}
+library(limma)
+library(Glimma)
+library(edgeR)
+library(Mus.musculus)
+
+# I didn't know if Mus.musculus was necessary if we are looking at human data
+```
+
+# Data packaging
+## Reading in count data
+
+```{r}
+rawdata <- read.csv(file.choose(), header=TRUE)
+files <- rawdata
+x <- readDGE(files, columns=c(1,3))
+class(x)
+
+# I'm so sorry I don't know how to progress, there aren't 9 files for this like the easy as 123 paper so I'm confused as to what I need to do next, do I just import it through the Import Dataset button?
+```
+
+
