@@ -12,12 +12,22 @@ knitr::opts_chunk$set(echo = TRUE)
 # Set-up
 
 ```{r}
-library(limma)
-library(Glimma)
+library(plyr)
+library(reshape2)
+library(dplyr)
+library(tidyverse)
+library(magrittr)
 library(edgeR)
-library(Mus.musculus)
-
-# I didn't know if Mus.musculus was necessary if we are looking at human data
+library(RColorBrewer)
+library(limma)
+library(ggplot2)
+library(readxl)
+library(pheatmap)
+library(here)
+library(xtable)
+library(biomaRt)
+library(org.Hs.eg.db)
+library(factoextra)
 ```
 
 # Data packaging
