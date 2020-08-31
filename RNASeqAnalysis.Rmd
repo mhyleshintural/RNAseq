@@ -68,3 +68,13 @@ simpleMetadata <- read_excel(here("cleanData/simpleMetadata_matched.xlsx"))
 
 # this seemed to work, I didn't think I had to do the rest of the steps as there were no file extension names
 ```
+
+## Creating a DGEList
+
+```{r DGEList}
+
+x <- readDGE(names, columns=c(1,3))
+
+#Hi Melanie, I tried to make a DGEList but it isn't working!!! I'm sorry
+
+```
