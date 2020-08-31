@@ -31,15 +31,40 @@ library(factoextra)
 ```
 
 # Data packaging
-## Reading in count data
+## Importing count data
 
-```{r}
-rawdata <- read.csv(file.choose(), header=TRUE)
-files <- rawdata
-x <- readDGE(files, columns=c(1,3))
-class(x)
-
-# I'm so sorry I don't know how to progress, there aren't 9 files for this like the easy as 123 paper so I'm confused as to what I need to do next, do I just import it through the Import Dataset button?
+```{r ImportCounts}
+ 
+# Read in bam counts
+termPlacentaCounts <- read.table(here("rawData/bam_counts.table.tsv"),
+                                 sep = '\t',
+                                 header = TRUE,
+                                 row.names = "Geneid")
+ 
+# clean up the column headers and remove the file extension names
+names(termPlacentaCounts) <- gsub("_Aligned.sortedByCoord.out.bam", "", names(termPlacentaCounts))
+ 
+ 
+names <- names(termPlacentaCounts) %>%
+  as.data.frame() %>%
+  separate(., col = ., into = c("cohort", "samplenumber", "tissue", "lane"), sep = "_") %>%
+  mutate(., samplename = paste(cohort, samplenumber, sep = "")) %>%
+  dplyr::select(., samplename)
+ 
+# convert back to a vector so I can overwrite the colnames in the counts table
+names <- names[,]
+ 
+# replace the old sample names with the new names
+names(termPlacentaCounts) <- names
 ```
 
+## Importing meta-data
 
+```{r ImportMetadata}
+
+# Read in metadata
+
+simpleMetadata <- read_excel(here("cleanData/simpleMetadata_matched.xlsx"))
+
+# this seemed to work, I didn't think I had to do the rest of the steps as there were no file extension names
+```
