@@ -66,7 +66,6 @@ names(termPlacentaCounts) <- names
 
 simpleMetadata <- read_excel(here("cleanData/simpleMetadata_matched.xlsx"))
 
-# this seemed to work, I didn't think I had to do the rest of the steps as there were no file extension names
 ```
 
 ## Creating a DGEList
@@ -107,6 +106,47 @@ for (i in 2:nsamples){
 # Plot the distribution of un-normalised counts
 un_normalised_lcpm <- cpm(DGEList_placenta, log=TRUE)
 boxplot(un_normalised_lcpm, las=2, col=col, main="")
+title(main = "Placenta: Un-normalised data (RNA)", ylab = "Log-cpm")
+
+```
+
+## Removing low expression genes
+
+```{r filterLow}
+
+# which genes are expressed at > 1 counts per million, in at least 6 samples
+# we choose 6 samples because prelabour LSCS has 6 patients, which is our smallest group
+keep.exprs <- rowSums(cpm >1) >= 6
+keep.exprs %>% table()
+
+# only keep the genes that met the criteria above
+DGEList_placenta <- DGEList_placenta[keep.exprs,, keep.lib.sizes = FALSE]
+
+```
+
+## Visualise distribution of expression after filtering
+
+```{r}
+
+cpm <- cpm(DGEList_placenta)
+lcpm_post <-cpm(DGEList_placenta, log=TRUE)
+
+nsamples <- ncol(DGEList_placenta)
+col = colorRampPalette(brewer.pal(11,"Spectral"))(ncol(DGEList_placenta))
+par(mfrow=c(1,2))
+plot(density(lcpm[,1]), col=col[1], lwd=2, ylim=c(0,0.70), las=2,
+     main="", xlab="")
+title(main="A. Raw data", xlab="Log-cpm")
+abline(v=0, lty=3)
+for (i in 2:nsamples){
+  den <- density(lcpm_post[,i])
+  lines(den$x, den$y, col=col[i], lwd=2)
+}
+# there seems to be one really big peak still, not sure why
+
+# Plot the distribution of un-normalised counts
+un_normalised_lcpm_post <- cpm(DGEList_placenta, log=TRUE)
+boxplot(un_normalised_lcpm_post, las=2, col=col, main="")
 title(main = "Placenta: Un-normalised data (RNA)", ylab = "Log-cpm")
 
 ```
