@@ -73,8 +73,18 @@ simpleMetadata <- read_excel(here("cleanData/simpleMetadata_matched.xlsx"))
 
 ```{r DGEList}
 
-x <- readDGE(names, columns=c(1,3))
+# new data frame of gene names for DGEList object
+genes <- as.character(rownames(termPlacentaCounts)) %>%
+  as.data.frame() %>%
+  set_colnames("SYMBOL")
 
-#Hi Melanie, I tried to make a DGEList but it isn't working!!! I'm sorry
+# new DGEList object for differential expression analysis
+DGEList_placenta <- DGEList(counts = termPlacentaCounts,
+                            samples = simpleMetadata,
+                            genes = genes)
 
 ```
+
+
+
+```{r}
