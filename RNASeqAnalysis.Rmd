@@ -85,6 +85,28 @@ DGEList_placenta <- DGEList(counts = termPlacentaCounts,
 
 ```
 
-
+## Visualise distribution of expression prior to filtering
 
 ```{r}
+
+cpm <- cpm(DGEList_placenta)
+lcpm <-cpm(DGEList_placenta, log=TRUE)
+
+nsamples <- ncol(DGEList_placenta)
+col = colorRampPalette(brewer.pal(11,"Spectral"))(ncol(DGEList_placenta))
+par(mfrow=c(1,2))
+plot(density(lcpm[,1]), col=col[1], lwd=2, ylim=c(0,0.70), las=2,
+     main="", xlab="")
+title(main="A. Raw data", xlab="Log-cpm")
+abline(v=0, lty=3)
+for (i in 2:nsamples){
+  den <- density(lcpm[,i])
+  lines(den$x, den$y, col=col[i], lwd=2)
+}
+
+# Plot the distribution of un-normalised counts
+un_normalised_lcpm <- cpm(DGEList_placenta, log=TRUE)
+boxplot(un_normalised_lcpm, las=2, col=col, main="")
+title(main = "Placenta: Un-normalised data (RNA)", ylab = "Log-cpm")
+
+```
