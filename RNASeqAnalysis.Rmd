@@ -36,10 +36,12 @@ library(factoextra)
 ```{r ImportCounts}
  
 # Read in bam counts
-termPlacentaCounts <- read.table(here("rawData/bam_counts.table.tsv"),
+termPlacentaCounts <- read.table(here("RNAseq/rawData/bam_counts.table.tsv"),
                                  sep = '\t',
                                  header = TRUE,
-                                 row.names = "Geneid")
+                                 row.names = "Geneid") %>% 
+  dplyr::select(., starts_with(c("SCP", "STP")))
+
  
 # clean up the column headers and remove the file extension names
 names(termPlacentaCounts) <- gsub("_Aligned.sortedByCoord.out.bam", "", names(termPlacentaCounts))
@@ -64,7 +66,7 @@ names(termPlacentaCounts) <- names
 
 # Read in metadata
 
-simpleMetadata <- read_excel(here("cleanData/simpleMetadata_matched.xlsx"))
+simpleMetadata <- read_excel(here("RNAseq/cleanData/simpleMetadata_matched.xlsx"))
 
 ```
 
@@ -84,6 +86,7 @@ DGEList_placenta <- DGEList(counts = termPlacentaCounts,
 
 ```
 
+# Data pre-processing
 ## Visualise distribution of expression prior to filtering
 
 ```{r}
@@ -128,13 +131,13 @@ DGEList_placenta <- DGEList_placenta[keep.exprs,, keep.lib.sizes = FALSE]
 
 ```{r}
 
-cpm <- cpm(DGEList_placenta)
+cpm_post <- cpm(DGEList_placenta)
 lcpm_post <-cpm(DGEList_placenta, log=TRUE)
 
 nsamples <- ncol(DGEList_placenta)
 col = colorRampPalette(brewer.pal(11,"Spectral"))(ncol(DGEList_placenta))
 par(mfrow=c(1,2))
-plot(density(lcpm[,1]), col=col[1], lwd=2, ylim=c(0,0.70), las=2,
+plot(density(lcpm_post[,1]), col=col[1], lwd=2, ylim=c(0,0.70), las=2,
      main="", xlab="")
 title(main="A. Raw data", xlab="Log-cpm")
 abline(v=0, lty=3)
@@ -148,5 +151,83 @@ for (i in 2:nsamples){
 un_normalised_lcpm_post <- cpm(DGEList_placenta, log=TRUE)
 boxplot(un_normalised_lcpm_post, las=2, col=col, main="")
 title(main = "Placenta: Un-normalised data (RNA)", ylab = "Log-cpm")
+
+```
+
+## Normalising gene expression distributions
+
+``` {r Normalisation}
+
+DGEList_placenta <- calcNormFactors(x, method = "TMM")
+DGEList_placenta$samples$norm.factors
+
+x2 <- DGEList_placenta
+x2$samples$norm.factors <- 1
+x2$counts[,1] <- ceiling(x2$counts[,1]*0.05)
+x2$counts[,2] <- x2$counts[,2]*5
+
+par(mfrow=c(1,2))
+lcpm <- cpm(x2, log=TRUE)
+boxplot(lcpm, las=2, col=col, main="")
+title(main="A. Unnormalised data",ylab="Log-cpm")
+x2 <- calcNormFactors(x2)  
+x2$samples$norm.factors
+
+lcpm <- cpm(x2, log=TRUE)
+boxplot(lcpm, las=2, col=col, main="")
+title(main="B. Normalised data",ylab="Log-cpm")
+
+```
+
+## Unsupervised clustering of samples
+
+``` {r MDSplots}
+
+lcpm <- cpm(DGEList_placenta, log=TRUE)
+par(mfrow=c(1,2))
+# col.group <- nsamples
+# levels(col.group) <-  brewer.pal(nlevels(col.group), "Set1")
+# col.group <- as.character(col.group)
+# col.lane <- lane
+# levels(col.lane) <-  brewer.pal(nlevels(col.lane), "Set2")
+# col.lane <- as.character(col.lane)
+# plotMDS(lcpm, labels=delivery_mode, col=col.group)
+# title(main="A. Sample groups")
+# plotMDS(lcpm, labels=lane, col=col.lane, dim=c(3,4))
+# title(main="B. Sequencing lanes")
+
+col.mode <- DGEList_placenta$samples$delivery_mode
+levels(col.mode) <-  brewer.pal(nlevels(col.mode), "Set1")
+col.mode <- as.character(col.mode)
+
+plotMDS(lcpm)
+
+# MDS filtered and normalised counts
+
+MDS <- plotMDS(DGEList_placenta, main = "MDS Filtered and Normalised Counts")
+
+# pull out the x and y
+x <- MDS$x
+y <- MDS$y
+
+# plot with ggplot
+cbind(x,y) %>%
+  as.data.frame() %>% 
+  tibble::rownames_to_column("samplename") %>% 
+  full_join(., DGEList_placenta$samples, by = "samplename") %>% 
+  ggplot() +
+  geom_point(aes(x = x,
+                 y = y,
+                 colour = delivery_mode,
+                 shape = fetal_sex),
+             size = 6) +
+  geom_text(aes(x = x,
+                y = y,
+                label = samplename,
+                colour = delivery_mode), vjust = -1) +
+  labs(title = "MDS plot filtered and normalised counts",
+       x = "Dim 1",
+       y = "Dim 2") +
+  theme_bw()
 
 ```
