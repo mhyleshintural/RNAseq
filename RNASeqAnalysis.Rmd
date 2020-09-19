@@ -89,7 +89,7 @@ DGEList_placenta <- DGEList(counts = termPlacentaCounts,
 # Data pre-processing
 ## Visualise distribution of expression prior to filtering
 
-```{r}
+```{r pre-filtering}
 
 cpm <- cpm(DGEList_placenta)
 lcpm <-cpm(DGEList_placenta, log=TRUE)
@@ -97,7 +97,7 @@ lcpm <-cpm(DGEList_placenta, log=TRUE)
 nsamples <- ncol(DGEList_placenta)
 col = colorRampPalette(brewer.pal(11,"Spectral"))(ncol(DGEList_placenta))
 par(mfrow=c(1,2))
-plot(density(lcpm[,1]), col=col[1], lwd=2, ylim=c(0,0.70), las=2,
+plot(density(lcpm[,1]), col=col[1], lwd=2, ylim=c(0,1.5), las=2,
      main="", xlab="")
 title(main="A. Raw data", xlab="Log-cpm")
 abline(v=0, lty=3)
@@ -106,22 +106,16 @@ for (i in 2:nsamples){
   lines(den$x, den$y, col=col[i], lwd=2)
 }
 
-# Plot the distribution of un-normalised counts
-un_normalised_lcpm <- cpm(DGEList_placenta, log=TRUE)
-boxplot(un_normalised_lcpm, las=2, col=col, main="")
-title(main = "Placenta: Un-normalised data (RNA)", ylab = "Log-cpm")
-
 ```
 
 ## Removing low expression genes
 
-```{r filterLow}
+``` {r filterLow}
 
 # which genes are expressed at > 1 counts per million, in at least 6 samples
 # we choose 6 samples because prelabour LSCS has 6 patients, which is our smallest group
 keep.exprs <- rowSums(cpm >1) >= 6
 keep.exprs %>% table()
-
 # only keep the genes that met the criteria above
 DGEList_placenta <- DGEList_placenta[keep.exprs,, keep.lib.sizes = FALSE]
 
@@ -129,11 +123,10 @@ DGEList_placenta <- DGEList_placenta[keep.exprs,, keep.lib.sizes = FALSE]
 
 ## Visualise distribution of expression after filtering
 
-```{r}
+```{r post-filtering}
 
 cpm_post <- cpm(DGEList_placenta)
 lcpm_post <-cpm(DGEList_placenta, log=TRUE)
-
 nsamples <- ncol(DGEList_placenta)
 col = colorRampPalette(brewer.pal(11,"Spectral"))(ncol(DGEList_placenta))
 par(mfrow=c(1,2))
@@ -145,12 +138,11 @@ for (i in 2:nsamples){
   den <- density(lcpm_post[,i])
   lines(den$x, den$y, col=col[i], lwd=2)
 }
-# there seems to be one really big peak still, not sure why
 
 # Plot the distribution of un-normalised counts
 un_normalised_lcpm_post <- cpm(DGEList_placenta, log=TRUE)
 boxplot(un_normalised_lcpm_post, las=2, col=col, main="")
-title(main = "Placenta: Un-normalised data (RNA)", ylab = "Log-cpm")
+title(main = "Placenta: Un-normalised data (RNA)", ylab = "Log-cpm") 
 
 ```
 
@@ -160,19 +152,16 @@ title(main = "Placenta: Un-normalised data (RNA)", ylab = "Log-cpm")
 
 DGEList_placenta <- calcNormFactors(x, method = "TMM")
 DGEList_placenta$samples$norm.factors
-
 x2 <- DGEList_placenta
 x2$samples$norm.factors <- 1
 x2$counts[,1] <- ceiling(x2$counts[,1]*0.05)
 x2$counts[,2] <- x2$counts[,2]*5
-
 par(mfrow=c(1,2))
 lcpm <- cpm(x2, log=TRUE)
 boxplot(lcpm, las=2, col=col, main="")
 title(main="A. Unnormalised data",ylab="Log-cpm")
 x2 <- calcNormFactors(x2)  
 x2$samples$norm.factors
-
 lcpm <- cpm(x2, log=TRUE)
 boxplot(lcpm, las=2, col=col, main="")
 title(main="B. Normalised data",ylab="Log-cpm")
@@ -210,7 +199,8 @@ MDS <- plotMDS(DGEList_placenta, main = "MDS Filtered and Normalised Counts")
 x <- MDS$x
 y <- MDS$y
 
-# plot with ggplot
+# plot with ggplot to observe delivery mode vs fetal sex
+
 cbind(x,y) %>%
   as.data.frame() %>% 
   tibble::rownames_to_column("samplename") %>% 
@@ -225,6 +215,90 @@ cbind(x,y) %>%
                 y = y,
                 label = samplename,
                 colour = delivery_mode), vjust = -1) +
+  labs(title = "MDS plot filtered and normalised counts",
+       x = "Dim 1",
+       y = "Dim 2") +
+  theme_bw()
+
+# plot with ggplot to observe delivery mode vs patient outcome
+
+cbind(x,y) %>%
+  as.data.frame() %>% 
+  tibble::rownames_to_column("samplename") %>% 
+  full_join(., DGEList_placenta$samples, by = "samplename") %>% 
+  ggplot() +
+  geom_point(aes(x = x,
+                 y = y,
+                 colour = delivery_mode,
+                 shape = PatientOutcome),
+             size = 6) +
+  geom_text(aes(x = x,
+                y = y,
+                label = samplename,
+                colour = delivery_mode), vjust = -1) +
+  labs(title = "MDS plot filtered and normalised counts",
+       x = "Dim 1",
+       y = "Dim 2") +
+  theme_bw()
+
+# plot with ggplot to observe delivery mode vs maternal BMI
+
+cbind(x,y) %>%
+  as.data.frame() %>% 
+  tibble::rownames_to_column("samplename") %>% 
+  full_join(., DGEList_placenta$samples, by = "samplename") %>% 
+  ggplot() +
+  geom_point(aes(x = x,
+                 y = y,
+                 colour = BMI,
+                 shape = delivery_mode),
+             size = 6) +
+  geom_text(aes(x = x,
+                y = y,
+                label = samplename,
+                colour = BMI), vjust = -1) +
+  labs(title = "MDS plot filtered and normalised counts",
+       x = "Dim 1",
+       y = "Dim 2") +
+  theme_bw()
+
+# plot with ggplot to observe delivery mode vs birth weight
+
+cbind(x,y) %>%
+  as.data.frame() %>% 
+  tibble::rownames_to_column("samplename") %>% 
+  full_join(., DGEList_placenta$samples, by = "samplename") %>% 
+  ggplot() +
+  geom_point(aes(x = x,
+                 y = y,
+                 colour = birthwgt,
+                 shape = delivery_mode),
+             size = 6) +
+  geom_text(aes(x = x,
+                y = y,
+                label = samplename,
+                colour = birthwgt), vjust = -1) +
+  labs(title = "MDS plot filtered and normalised counts",
+       x = "Dim 1",
+       y = "Dim 2") +
+  theme_bw()
+
+# plot with ggplot to observe delivery mode vs maternal age
+
+cbind(x,y) %>%
+  as.data.frame() %>% 
+  tibble::rownames_to_column("samplename") %>% 
+  full_join(., DGEList_placenta$samples, by = "samplename") %>% 
+  ggplot() +
+  geom_point(aes(x = x,
+                 y = y,
+                 colour = maternalAge,
+                 shape = delivery_mode),
+             size = 6) +
+  geom_text(aes(x = x,
+                y = y,
+                label = samplename,
+                colour = maternalAge), vjust = -1) +
   labs(title = "MDS plot filtered and normalised counts",
        x = "Dim 1",
        y = "Dim 2") +
