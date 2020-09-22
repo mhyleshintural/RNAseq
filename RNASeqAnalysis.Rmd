@@ -58,6 +58,9 @@ names <- names[,]
  
 # replace the old sample names with the new names
 names(termPlacentaCounts) <- names
+
+termPlacentaCounts <- termPlacentaCounts[,order(colnames(termPlacentaCounts), decreasing=FALSE)]
+
 ```
 
 ## Importing meta-data
@@ -66,7 +69,8 @@ names(termPlacentaCounts) <- names
 
 # Read in metadata
 
-simpleMetadata <- read_excel(here("RNAseq/cleanData/simpleMetadata_matched.xlsx"))
+simpleMetadata <- read_excel(here("RNAseq/cleanData/simpleMetadata_matched.xlsx")) %>% 
+  dplyr::arrange(., "samplename")
 
 ```
 
