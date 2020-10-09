@@ -36,18 +36,23 @@ library(factoextra)
 ```{r ImportCounts}
  
 # Read in bam counts
-termPlacentaCounts <- read.table(here("RNAseq/rawData/bam_counts.table.tsv"),
+termPlacentaCounts <- read.table(here("rawData/bam_counts.table.tsv"),
                                  sep = '\t',
                                  header = TRUE,
-                                 row.names = "Geneid") %>% 
-  dplyr::select(., starts_with(c("SCP", "STP")))
+                                 row.names = "Geneid") %>%
+  t() %>%
+  as.data.frame() %>% 
+  tibble::rownames_to_column("samplename") %>% 
+  filter(str_detect(samplename, "^S")) %>% 
+  tibble::column_to_rownames("samplename") %>% 
+  t()
 
  
 # clean up the column headers and remove the file extension names
-names(termPlacentaCounts) <- gsub("_Aligned.sortedByCoord.out.bam", "", names(termPlacentaCounts))
+colnames(termPlacentaCounts) <- gsub("_Aligned.sortedByCoord.out.bam", "", colnames(termPlacentaCounts))
  
  
-names <- names(termPlacentaCounts) %>%
+names <- colnames(termPlacentaCounts) %>%
   as.data.frame() %>%
   separate(., col = ., into = c("cohort", "samplenumber", "tissue", "lane"), sep = "_") %>%
   mutate(., samplename = paste(cohort, samplenumber, sep = "")) %>%
@@ -57,9 +62,20 @@ names <- names(termPlacentaCounts) %>%
 names <- names[,]
  
 # replace the old sample names with the new names
-names(termPlacentaCounts) <- names
+colnames(termPlacentaCounts) <- names
 
 termPlacentaCounts <- termPlacentaCounts[,order(colnames(termPlacentaCounts), decreasing=FALSE)]
+
+```
+
+## Remove mRNA with zero counts in all samples
+
+```{r filterZero}
+
+# check to establish if any mRNA have no expression across all samples
+table(rowSums(termPlacentaCounts == 0) == ncol(termPlacentaCounts))
+# remove mRNAs with zero counts in all samples
+termPlacentaCounts <- termPlacentaCounts[ rowSums(termPlacentaCounts)!=0, ]
 
 ```
 
@@ -69,8 +85,9 @@ termPlacentaCounts <- termPlacentaCounts[,order(colnames(termPlacentaCounts), de
 
 # Read in metadata
 
-simpleMetadata <- read_excel(here("RNAseq/cleanData/simpleMetadata_matched.xlsx")) %>% 
-  dplyr::arrange(., "samplename")
+simpleMetadata <- read_excel(here("cleanData/simpleMetadata_matched.xlsx")) %>% 
+  dplyr::arrange(., samplename) %>% 
+  dplyr::filter(str_detect(samplename, "^S"))
 
 ```
 
@@ -95,13 +112,16 @@ DGEList_placenta <- DGEList(counts = termPlacentaCounts,
 
 ```{r pre-filtering}
 
+# new dataframe of counts per million
 cpm <- cpm(DGEList_placenta)
+# new dataframe of log2 counts per million
 lcpm <-cpm(DGEList_placenta, log=TRUE)
 
+# plot the density of counts pre-filtering for low expression
 nsamples <- ncol(DGEList_placenta)
 col = colorRampPalette(brewer.pal(11,"Spectral"))(ncol(DGEList_placenta))
 par(mfrow=c(1,2))
-plot(density(lcpm[,1]), col=col[1], lwd=2, ylim=c(0,1.5), las=2,
+plot(density(lcpm[,1]), col=col[1], lwd=2, ylim=c(0,0.6), las=2,
      main="", xlab="")
 title(main="A. Raw data", xlab="Log-cpm")
 abline(v=0, lty=3)
@@ -114,7 +134,7 @@ for (i in 2:nsamples){
 
 ## Removing low expression genes
 
-``` {r filterLow}
+```{r filterLow}
 
 # which genes are expressed at > 1 counts per million, in at least 6 samples
 # we choose 6 samples because prelabour LSCS has 6 patients, which is our smallest group
@@ -125,6 +145,8 @@ DGEList_placenta <- DGEList_placenta[keep.exprs,, keep.lib.sizes = FALSE]
 
 ```
 
+- removing genes with low expression has reduced our gene count from 45312 to 15404 genes.
+
 ## Visualise distribution of expression after filtering
 
 ```{r post-filtering}
@@ -134,9 +156,9 @@ lcpm_post <-cpm(DGEList_placenta, log=TRUE)
 nsamples <- ncol(DGEList_placenta)
 col = colorRampPalette(brewer.pal(11,"Spectral"))(ncol(DGEList_placenta))
 par(mfrow=c(1,2))
-plot(density(lcpm_post[,1]), col=col[1], lwd=2, ylim=c(0,0.70), las=2,
+plot(density(lcpm_post[,1]), col=col[1], lwd=2, ylim=c(0,0.60), las=2,
      main="", xlab="")
-title(main="A. Raw data", xlab="Log-cpm")
+title(main="A. Filtered data", xlab="Log-cpm")
 abline(v=0, lty=3)
 for (i in 2:nsamples){
   den <- density(lcpm_post[,i])
@@ -154,30 +176,48 @@ title(main = "Placenta: Un-normalised data (RNA)", ylab = "Log-cpm")
 
 ``` {r Normalisation}
 
-DGEList_placenta <- calcNormFactors(x, method = "TMM")
-DGEList_placenta$samples$norm.factors
-x2 <- DGEList_placenta
-x2$samples$norm.factors <- 1
-x2$counts[,1] <- ceiling(x2$counts[,1]*0.05)
-x2$counts[,2] <- x2$counts[,2]*5
-par(mfrow=c(1,2))
-lcpm <- cpm(x2, log=TRUE)
-boxplot(lcpm, las=2, col=col, main="")
-title(main="A. Unnormalised data",ylab="Log-cpm")
-x2 <- calcNormFactors(x2)  
-x2$samples$norm.factors
-lcpm <- cpm(x2, log=TRUE)
-boxplot(lcpm, las=2, col=col, main="")
-title(main="B. Normalised data",ylab="Log-cpm")
+# DGEList_placenta <- calcNormFactors(x, method = "TMM")
+# DGEList_placenta$samples$norm.factors
+# x2 <- DGEList_placenta
+# x2$samples$norm.factors <- 1
+# x2$counts[,1] <- ceiling(x2$counts[,1]*0.05)
+# x2$counts[,2] <- x2$counts[,2]*5
+# par(mfrow=c(1,2))
+# lcpm <- cpm(x2, log=TRUE)
+# boxplot(lcpm, las=2, col=col, main="")
+# title(main="A. Unnormalised data",ylab="Log-cpm")
+# x2 <- calcNormFactors(x2)  
+# x2$samples$norm.factors
+# lcpm <- cpm(x2, log=TRUE)
+# boxplot(lcpm, las=2, col=col, main="")
+# title(main="B. Normalised data",ylab="Log-cpm")
+
+
 
 ```
 
+## TMM normalisation of libraries
+
+```{r normalisation}
+
+# Distribution of un-normalised counts 
+nsamples <- ncol(DGEList_placenta)
+col = colorRampPalette(brewer.pal(11,"Spectral"))(ncol(DGEList_placenta))
+# calculate normalisation factors and apply to the DGEList object
+DGEList_placenta <- calcNormFactors(DGEList_placenta, method = "TMM")
+# Plot the distribution of counts after normalisation
+normalised_lcpm <- cpm(DGEList_placenta, log = TRUE)
+boxplot(normalised_lcpm, las = 2, col = col, main = "")
+title(main = "Placenta: Normalised data (RNA)", ylab = "Log-cpm")
+
+```
+
+# Exploratory plots
 ## Unsupervised clustering of samples
 
 ``` {r MDSplots}
 
 lcpm <- cpm(DGEList_placenta, log=TRUE)
-par(mfrow=c(1,2))
 # col.group <- nsamples
 # levels(col.group) <-  brewer.pal(nlevels(col.group), "Set1")
 # col.group <- as.character(col.group)
@@ -307,5 +347,80 @@ cbind(x,y) %>%
        x = "Dim 1",
        y = "Dim 2") +
   theme_bw()
+
+## what is the relationship between gestational age at birth and birth weight?
+ggplot(data = DGEList_placenta$samples,
+       aes(x = gestationPlus,
+                 y = birthwgt,
+                 colour = fetal_sex)) +
+  geom_point(aes(group = fetal_sex), size = 6) +
+    labs(title = "Relationship between Gestational Age at birth and neonate weight at birth",
+       x = "Gestational Age (Weeks')",
+       y = "Birth Weight (grams)") +
+  geom_smooth(aes(group = fetal_sex),
+              se = FALSE, method = loess) +
+  theme_bw(base_size = 14)
+
+```
+
+# Differential expression analysis
+
+```{r differential Expression mode only}
+
+DGEList_placenta$samples <- mutate(DGEList_placenta$samples, mode = ifelse(delivery_mode == "LSCS in labour", "LSCS_lab",
+                                                    ifelse(delivery_mode == "Operative vaginal", "op_vag",
+                                                           ifelse(delivery_mode == "Prelabout LSCS", "LSCS_pre",
+                                                                  ifelse(delivery_mode == "Unassisted vaginal", "unassist_vag", NA)))))
+                                   
+                                   
+levels(DGEList_placenta$samples$mode) <- c("LSCS_lab", "op_vag", "LSCS_pre", "unassist_vag")
+
+# design to test DE between LSCS in labour and pre-labour LSCS
+design_mode <- model.matrix(~0 + mode, 
+                                   data = DGEList_placenta$samples)
+colnames(design_mode) <- levels(DGEList_placenta$samples$mode)
+
+voom_mode <- voomWithQualityWeights(DGEList_placenta, 
+                                           design_mode, plot=TRUE)
+
+fit_mode <- lmFit(voom_mode, design_mode)
+
+fit_mode <- eBayes(fit_mode)
+
+summary(decideTests(fit_mode)) # before FDR correction
+
+contrasts <- c("LSCS_pre-LSCS_lab", "unassist_vag-op_vag")
+
+contrast_matrix <- makeContrasts(contrasts = contrasts, levels = design_mode)
+
+fit_contrast <- contrasts.fit(fit_mode, contrast_matrix)
+fit_contrast <- eBayes(fit_contrast)
+summ_fit_contrast <- summary(decideTests(fit_contrast, adjust.method="BH", p.value=0.05))
+
+topTable <- topTable(fit_contrast, coef = 1)
+
+
+```
+
+## plot GOI
+
+
+
+```{r differential Expression mode and fetal sex}
+
+# design to test DE between LSCS in labour and pre-labour LSCS looking at female and male bearing pregnancies seperately
+design_independent <- model.matrix(~ fetal_sex + 
+                                     fetal_sex:delivery_mode, 
+                                   data = DGEList_placenta$samples)
+
+voom_independent <- voomWithQualityWeights(DGEList_placenta, 
+                                           design_independent, plot=TRUE)
+
+fit_independent <- lmFit(voom_independent, 
+                         design_independent)
+
+fit_independent <- eBayes(fit_independent)
+
+summary(decideTests(fit_independent)) # before FDR correction
 
 ```
