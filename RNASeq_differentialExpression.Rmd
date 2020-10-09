@@ -1,0 +1,484 @@
+---
+title: "RNASeq_differentialExpression"
+author: "Melanie Smith"
+date: "09/10/2020"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+    echo = TRUE,
+    message = FALSE,
+    warning = FALSE,
+    fig.align = "center",
+    fig.cap = "yes",
+    results = "hide"
+)
+
+```
+
+# Load required libraries
+
+```{r loadLibraries}
+
+library(plyr)
+library(reshape2)
+library(dplyr)
+library(tidyverse)
+library(magrittr)
+library(edgeR)
+library(RColorBrewer)
+library(limma)
+library(ggplot2)
+library(pheatmap)
+library(here)
+library(xtable)
+
+```
+
+## Import PAC RNASeq Count Data
+
+```{r importRaw_PAC}
+
+
+# Import Jimmy's counts table
+RNAcounts <- read.table(here("cleanData/NIH_terminations_firstSecond_counts.tsv"), 
+                             sep = "\t", 
+                             header = TRUE, 
+                             row.names = "Geneid")
+
+# Remove PAC0025 due to extremely low counts
+RNAcounts <- RNAcounts %>%
+  dplyr::select(., -c(PAC025))
+
+# create a variable for the list of samples with decidual inclusion (DI)
+hyperVariableSamples <- c("PAC008", "PAC036", "PAC035", "PAC006", "PAC024", "PAC045", "PAC039", "PAC041")
+
+# remove DI samples from the counts data
+RNAcounts_noHV <- RNAcounts %>%
+  dplyr::select(., -(hyperVariableSamples))
+
+# reset the column names
+colnames(RNAcounts_noHV) <- gsub("PAC", "", colnames(RNAcounts_noHV))
+
+# Create a df of sample names from the counts table, then add PAC prefix and pad to 7 characters
+countsPlacentaNames <- data.frame(names(RNAcounts_noHV)) %>%
+  mutate(names.RNAcounts_noHV. = paste0("PAC",stringr::str_pad(names.RNAcounts_noHV., width = 4, pad = "0")))
+# convert back to a vector so I can overwrite the colnames in the counts table
+countsPlacentaNames <- countsPlacentaNames[,]
+# replace the old sample names with the new names (PACXXXX)
+names(RNAcounts_noHV) <- countsPlacentaNames
+# ensure the columns are ordered by assending sample name
+RNAcounts_noHV <- RNAcounts_noHV[,order(colnames(RNAcounts_noHV),decreasing=FALSE)]
+
+
+#Import meta data for all samples
+samples <- readRDS(here("cleanData/samples.rds")) %>%
+  dplyr::filter(., !grepl('PAC0025', samplename)) # remove PAC0025 - very low counts
+
+# add simpleOutcome to metadata
+samples$simpleOutcome <- "unknown"
+samples$Cohort <- "PAC"
+
+samples_noHV <- samples %>%
+  dplyr::filter(., !grepl('PAC0008|PAC0036|PAC0035|PAC0006|PAC0024|PAC0045|PAC0039|PAC0041', samplename)) %>% 
+    dplyr::filter(., !grepl('PAC0025', samplename)) %>% 
+  dplyr::select(., samplename, simpleOutcome, Cohort, fetalSex = updatedFetalSex, gestationalAge, processGroup)
+
+
+```
+
+## Import PAC STP SCP RNASeq Count Data
+
+```{r importCounts}
+
+# Read in bam counts
+termPlacentaCounts <- read.table(here("rawData/bam_counts.table.tsv"),
+                                 sep = '\t',
+                                 header = TRUE,
+                                 row.names = "Geneid",
+                                 comment = '#')
+# clean up the colum headers
+names(termPlacentaCounts) <- gsub("_Aligned.sortedByCoord.out.bam", "", names(termPlacentaCounts))
+
+
+names <- names(termPlacentaCounts) %>%
+  as.data.frame() %>%
+  separate(., col = ., into = c("cohort", "samplenumber", "tissue", "lane"), sep = "_") %>% 
+  mutate(., samplename = paste(cohort, samplenumber, sep = "")) %>% 
+  dplyr::select(., samplename)
+
+# convert back to a vector so I can overwrite the colnames in the counts table
+names <- names[,]
+# replace the old sample names with the new names
+names(termPlacentaCounts) <- names
+
+# create a variable for the list of hyper variable samples
+outlierSamples <- c("PAC0211", "PAC0202")
+# remove HV samples from the counts data
+termPlacentaCounts <- termPlacentaCounts %>%
+  dplyr::select(., -(outlierSamples))
+
+simpleMetadata <- read_csv("cleanData/simpleMetadata.csv")
+
+# remove outlier sample from the sample metadata
+simpleMetadata <- simpleMetadata %>%
+  dplyr::filter(., !grepl('PAC0211|PAC0202', samplename)) %>% 
+  dplyr::select(., samplename, simpleOutcome, Cohort, fetalSex, gestationalAge = gestationPlus)
+
+# add processGroup to metadata
+simpleMetadata$processGroup <- "groupC"
+simpleMetadata$gestationalAge <- as.integer(simpleMetadata$gestationalAge)
+
+```
+
+## combine counts and metadata
+
+```{r importMetaData}
+
+allCounts <- full_join(RNAcounts_noHV %>% tibble::rownames_to_column("gene"),
+                       termPlacentaCounts %>% tibble::rownames_to_column("gene"),
+                       by = "gene") %>% 
+  tibble::column_to_rownames("gene")
+  
+# ensure the columns are ordered by assending sample name
+allCounts <- allCounts[,order(colnames(allCounts),decreasing=FALSE)]
+
+allMetadata <- rbind(samples_noHV, simpleMetadata) %>% 
+  arrange(., samplename)
+
+```
+
+
+```{r filterSeqNoise}
+
+# replace NAs with 0 after join.
+allCounts[is.na(allCounts)] <- 0
+
+# check to establish if any miRNA have no expression across all samples
+table(rowSums(allCounts == 0) == nrow(allMetadata))
+  
+# remove miRNAs with zero counts in all samples
+allCounts <- allCounts[ rowSums(allCounts)!=0, ]
+
+```
+
+# Establish DGE List object
+
+- Seperate DGEList objects will be created for each batch in order to normalise and further filter batches independently.
+- This approach follows the methods outlined by Rafael Irizarry at the GIW/ABACBS 2019 plenary lecture
+
+```{r DGEList_sep}
+
+# create a new DGEList object containing count and meta data for each unique batch
+for (i in seq_along(unique(allMetadata$processGroup))) {
+DGEList <- DGEList(
+  counts = allCounts[, which(allMetadata$processGroup == unique(allMetadata$processGroup)[i])],
+  samples = dplyr::filter(allMetadata, processGroup == unique(allMetadata$processGroup)[i]),
+  genes = as.character(rownames(allCounts[, which(allMetadata$processGroup == unique(allMetadata$processGroup)[i])])) %>%
+  as.data.frame() %>%
+  set_colnames("SYMBOL")
+  )
+assign(paste0("DGEList_", unique(allMetadata$processGroup)[i]), DGEList)
+}
+          
+```
+
+# TMM normalisation of libraries
+
+Before differential expression analysis the sample libraries need to be normalised to account for differences in initial library size.     
+Normalising the libraries allows for the direct comparison between samples.   
+Here the Trimmed Mean of M Values method is used.   
+
+```{r TMM}
+# groupA
+# Plot the distribution of (low count filtered) counts prior to normalisation 
+nsamples <- ncol(DGEList_groupA)
+# set up colours for the density plots
+col_A <- colorRampPalette(brewer.pal(11,"Spectral"))(ncol(DGEList_groupA))
+lcpm <- cpm(DGEList_groupA, log = TRUE)
+boxplot(lcpm, las = 2, col = col_A, main = "")
+title(main = "DGEList_groupA: Un-normalised data ",ylab = "Log-cpm") 
+# calculate normalisation factors and apply to the DGEList object
+DGEList_groupA <- calcNormFactors(DGEList_groupA, method = "TMM")
+# groupB
+# Plot the distribution of (low count filtered) counts prior to normalisation 
+nsamples <- ncol(DGEList_groupB)
+# set up colours for the density plots
+col_B <- colorRampPalette(brewer.pal(11,"Spectral"))(ncol(DGEList_groupB))
+lcpm <- cpm(DGEList_groupB, log = TRUE)
+boxplot(lcpm, las = 2, col = col_B, main = "")
+title(main = "DGEList_groupB: Un-normalised data ",ylab = "Log-cpm") 
+# calculate normalisation factors and apply to the DGEList object
+DGEList_groupB <- calcNormFactors(DGEList_groupB, method = "TMM")
+# groupC
+# Plot the distribution of (low count filtered) counts prior to normalisation 
+nsamples <- ncol(DGEList_groupC)
+# set up colours for the density plots
+col_C <- colorRampPalette(brewer.pal(11,"Spectral"))(ncol(DGEList_groupC))
+lcpm <- cpm(DGEList_groupC, log = TRUE)
+boxplot(lcpm, las = 2, col = col_C, main = "")
+title(main = "DGEList_groupC: Un-normalised data ",ylab = "Log-cpm") 
+# calculate normalisation factors and apply to the DGEList object
+DGEList_groupC <- calcNormFactors(DGEList_groupC, method = "TMM")
+```
+
+# Filter biological noise and plot
+
+## DGEList_groupA
+ 
+```{r filter_bionoise_A}
+# calculate the cpm value of a read count of 10 given the mean library size (to be used in the keep.genes)
+cpm(10, mean(DGEList_groupA$samples$lib.size))
+# new df of unfiltered cpm for the reduced DGEList
+rawCpm_placenta_groupA <- cpm(DGEList_groupA)
+# new df of unfiltered log 2 cpm for the reduced DGEList
+rawlcpm_placenta_groupA <- cpm(DGEList_groupA, log = TRUE)
+# remove low expressed genes
+keep.exprs <- rowSums(rawCpm_placenta_groupA > 2.5) >= 14
+DGEList_groupA <- DGEList_groupA[keep.exprs,, keep.lib.sizes = FALSE]
+## The density of log-CPM values for pre-filtered data 
+# (A) and post-filtered data 
+# (B) are shown for each sample. 
+## Dotted vertical lines mark the log-CPM of 1 threshold 
+# (equivalent to a CPM value of 2) used in the filtering step.
+nsamples <- ncol(DGEList_groupA)
+par(mfrow=c(1,2))
+plot(density(rawlcpm_placenta_groupA[,1]), col = col_A[1], lwd = 2, ylim = c(0, 0.20), las = 2,
+  main = "", xlab = "")
+title(main = "A. DGEList_groupA Unfiltered data", xlab = "Log-cpm") 
+abline(v = 1, lty = 3)
+for (i in 1:nsamples){
+  den <- density(rawlcpm_placenta_groupA[,i])
+  lines(den$x, den$y, col = col_A[i], lwd = 2)
+}
+#legend("topright", legend = samples$samplename, text.col = col, bty = "n")
+#dev.off()
+lcpm <- cpm(DGEList_groupA, log=TRUE)
+plot(density(lcpm[,1]), col = col_A[1], lwd = 2, ylim = c(0, 0.20), las = 2,
+  main = "", xlab = "")
+title(main = "B. DGEList_groupA Filtered data", xlab = "Log-cpm") 
+abline(v = 1, lty = 3)
+for (i in 1:nsamples){
+  den <- density(lcpm[,i])
+lines(den$x, den$y, col = col_A[i], lwd = 2)
+}
+#legend("topright", legend=samples$samplename, text.col=col, bty="n")
+#dev.off ()
+par(mfrow=c(1,1))
+# Distribution of normalised and filtered counts data
+boxplot(cpm(DGEList_groupA, log = TRUE), las = 2, col = col_A, main = "")
+title(main = "DGEList_groupA: Normalised data",ylab = "Log-cpm")
+```
+
+## DGEList_groupB
+ 
+```{r filter_bionoise_B}
+# calculate the cpm value of a read count of 10 given the mean library size (to be used in the keep.genes)
+cpm(10, mean(DGEList_groupB$samples$lib.size))
+# new df of unfiltered cpm for the reduced DGEList
+rawCpm_placenta_groupB <- cpm(DGEList_groupB)
+# new df of unfiltered log 2 cpm for the reduced DGEList
+rawlcpm_placenta_groupB <- cpm(DGEList_groupB, log = TRUE)
+# remove low expressed genes
+keep.exprs <- rowSums(rawCpm_placenta_groupB > 2.5) >= 3
+DGEList_groupB <- DGEList_groupB[keep.exprs,, keep.lib.sizes = FALSE]
+## The density of log-CPM values for pre-filtered data 
+# (A) and post-filtered data 
+# (B) are shown for each sample. 
+## Dotted vertical lines mark the log-CPM of 1 threshold 
+# (equivalent to a CPM value of 2) used in the filtering step.
+nsamples <- ncol(DGEList_groupB)
+col <- brewer.pal(nsamples, "Paired")
+par(mfrow=c(1,2))
+plot(density(rawlcpm_placenta_groupB[,1]), col = col_B[1], lwd = 2, ylim = c(0, 0.20), las = 2,
+  main = "", xlab = "")
+title(main = "A. DGEList_groupB Unfiltered data", xlab = "Log-cpm") 
+abline(v = 1, lty = 3)
+for (i in 1:nsamples){
+  den <- density(rawlcpm_placenta_groupB[,i])
+  lines(den$x, den$y, col = col_B[i], lwd = 2)
+}
+#legend("topright", legend = samples$samplename, text.col = col, bty = "n")
+#dev.off()
+lcpm <- cpm(DGEList_groupB, log=TRUE)
+plot(density(lcpm[,1]), col = col_B[1], lwd = 2, ylim = c(0, 0.20), las = 2,
+  main = "", xlab = "")
+title(main = "B. DGEList_groupB Filtered data", xlab = "Log-cpm") 
+abline(v = 1, lty = 3)
+for (i in 1:nsamples){
+  den <- density(lcpm[,i])
+lines(den$x, den$y, col = col[i], lwd = 2)
+}
+#legend("topright", legend=samples$samplename, text.col=col, bty="n")
+#dev.off ()
+par(mfrow=c(1,1))
+# Distribution of normalised and filtered counts data
+boxplot(cpm(DGEList_groupB, log = TRUE), las = 2, col = col_B, main = "")
+title(main = "DGEList_groupB: Normalised data",ylab = "Log-cpm")
+```
+
+## DGEList_groupB
+ 
+```{r filter_bionoise_C}
+# calculate the cpm value of a read count of 10 given the mean library size (to be used in the keep.genes)
+cpm(10, mean(DGEList_groupC$samples$lib.size))
+# new df of unfiltered cpm for the reduced DGEList
+rawCpm_placenta_groupC <- cpm(DGEList_groupC)
+# new df of unfiltered log 2 cpm for the reduced DGEList
+rawlcpm_placenta_groupC <- cpm(DGEList_groupC, log = TRUE)
+# remove low expressed genes
+keep.exprs <- rowSums(rawCpm_placenta_groupC > 2.5) >= 3
+DGEList_groupC <- DGEList_groupC[keep.exprs,, keep.lib.sizes = FALSE]
+## The density of log-CPM values for pre-filtered data 
+# (A) and post-filtered data 
+# (B) are shown for each sample. 
+## Dotted vertical lines mark the log-CPM of 1 threshold 
+# (equivalent to a CPM value of 2) used in the filtering step.
+nsamples <- ncol(DGEList_groupC)
+col <- brewer.pal(nsamples, "Paired")
+par(mfrow=c(1,2))
+plot(density(rawlcpm_placenta_groupC[,1]), col = col_B[1], lwd = 2, ylim = c(0, 0.20), las = 2,
+  main = "", xlab = "")
+title(main = "A. DGEList_groupC Unfiltered data", xlab = "Log-cpm") 
+abline(v = 1, lty = 3)
+for (i in 1:nsamples){
+  den <- density(rawlcpm_placenta_groupC[,i])
+  lines(den$x, den$y, col = col_C[i], lwd = 2)
+}
+#legend("topright", legend = samples$samplename, text.col = col, bty = "n")
+#dev.off()
+lcpm <- cpm(DGEList_groupC, log=TRUE)
+plot(density(lcpm[,1]), col = col_C[1], lwd = 2, ylim = c(0, 0.20), las = 2,
+  main = "", xlab = "")
+title(main = "B. DGEList_groupC Filtered data", xlab = "Log-cpm") 
+abline(v = 1, lty = 3)
+for (i in 1:nsamples){
+  den <- density(lcpm[,i])
+lines(den$x, den$y, col = col[i], lwd = 2)
+}
+#legend("topright", legend=samples$samplename, text.col=col, bty="n")
+#dev.off ()
+par(mfrow=c(1,1))
+# Distribution of normalised and filtered counts data
+boxplot(cpm(DGEList_groupC, log = TRUE), las = 2, col = col_C, main = "")
+title(main = "DGEList_groupC: Normalised data",ylab = "Log-cpm")
+```
+
+## Combine DGElist objects
+
+```{r combine}
+# combine DGEList objects
+combined_counts <- full_join(as.data.frame(DGEList_groupA$counts) %>%
+                      tibble::rownames_to_column("gene"),
+                    as.data.frame(DGEList_groupB$counts) %>% 
+                      tibble::rownames_to_column("gene"), by = "gene") %>%  
+                    full_join(., as.data.frame(DGEList_groupC$counts) %>% 
+                      tibble::rownames_to_column("gene"), by = "gene") %>% 
+  tibble::column_to_rownames("gene") %>% 
+  as.matrix()
+# ensure the columns are ordered by assending sample name
+combined_counts <- combined_counts[,order(colnames(combined_counts),decreasing=FALSE)]
+combined_counts[is.na(combined_counts)] <- 0
+
+# new sample metadata which includes the library size info
+sampleMeta_norm <- rbind(DGEList_groupA$samples,
+                         DGEList_groupB$samples,
+                         DGEList_groupC$samples) %>% 
+  arrange(., samplename)
+
+DGEList_norm <- DGEList(counts = combined_counts,
+                        samples = sampleMeta_norm)
+# plot the density of sample correlation prior to any corrections
+plot(density(cor(DGEList_norm$counts)), lwd=3, main="Density plot filtered and normalised")
+
+cpm_norm <- cpm(DGEList_norm, log=FALSE)
+```
+
+## MDS of filtered and TMM normalised counts
+
+```{r mdsRaw}
+
+# calculate MDS data
+MDS <- plotMDS(DGEList_norm, main = "MDS norm counts")
+
+# pull out x and y
+x <- MDS$x
+y <- MDS$y  
+
+# plot with ggplot
+cbind(x, y) %>% 
+  as.data.frame() %>% 
+  tibble::rownames_to_column("samplename") %>% 
+  full_join(., sampleMeta_norm, by = "samplename") %>% 
+  ggplot() +
+  geom_point(aes(x = x,
+                 y = y,
+                 colour = processGroup,
+                 size = 6)) +
+  geom_text(aes(x = x,
+                y = y,
+                label = samplename,
+                colour = processGroup), vjust = -1) +
+  labs(title = "MDS plot normalised gene-level counts \nplacenta",
+       y = "DIM 2",
+       x = "DIM 1") +
+  theme_bw()
+```
+
+## Remove batch effects using covariates and design matrix
+  - the design matrix controls for gestationalAge only
+
+```{r limmaRemoveBatchEffect}
+
+# create a design matrix
+design_gestation <- model.matrix(~ gestationalAge, 
+                                 data = sampleMeta_norm)
+
+lcpm <- cpm(DGEList_norm, log = TRUE)
+# pass to removeBatchEffect
+correctedCounts_gestation <- limma::removeBatchEffect(cpm(DGEList_norm, log = TRUE), 
+                                                   design = design_gestation, 
+                                                   batch = sampleMeta_norm$processGroup)
+
+MDS <- plotMDS(correctedCounts_gestation, main = "MDS batch corrected counts")
+
+```
+
+## Plot Genes of Interest
+
+```{r printGOI}
+
+# make an object for the Gene of Interest (GOI)
+# we use this to subset the gene we want to look at from the full matrix of counts
+GOI <- "ENSG00000172270"
+# make an object for the common name/s of the GOI
+# we will use this to add informtion to the y-axis lable on the plot
+gene_name <- "(BSG)"
+
+data.frame(cpm_norm) %>%
+  as.data.frame() %>% 
+  tibble::rownames_to_column("gene") %>% 
+  filter(., gene == GOI) %>% 
+  tibble::column_to_rownames("gene") %>% 
+  t() %>%
+  as.data.frame() %>% 
+  tibble::rownames_to_column("samplename") %>% 
+  dplyr::left_join(., sampleMeta_norm[,c("samplename", "gestationalAge", "fetalSex", "processGroup")], by = "samplename") %>% 
+  dplyr::mutate(bin = cut_width(gestationalAge, width = 1, boundary = 6)) %>% 
+  dplyr::mutate(group = round_any(gestationalAge, 1, round)) %>% 
+  dplyr::mutate(sex_age = paste(gestationalAge, fetalSex, sep = "_")) %>% 
+  ggplot() +
+  geom_boxplot(aes(x = as.factor(gestationalAge),
+                   y =  ENSG00000172270,
+                   fill = fetalSex
+                   )) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90)) +
+    theme(axis.text.x=element_text(colour="black")) +
+    theme(axis.text.y=element_text(colour="black")) +
+  ylab(paste(GOI, gene_name, "CPM", sep = " ")) +
+  xlab("Gestational Age (weeks')") +
+  labs(fill = "Fetal Sex")
+
+```
