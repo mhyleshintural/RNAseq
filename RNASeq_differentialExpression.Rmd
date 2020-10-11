@@ -71,20 +71,23 @@ names(RNAcounts_noHV) <- countsPlacentaNames
 # ensure the columns are ordered by assending sample name
 RNAcounts_noHV <- RNAcounts_noHV[,order(colnames(RNAcounts_noHV),decreasing=FALSE)]
 
-
 #Import meta data for all samples
 samples <- readRDS(here("cleanData/samples.rds")) %>%
   dplyr::filter(., !grepl('PAC0025', samplename)) # remove PAC0025 - very low counts
 
 # add simpleOutcome to metadata
-samples$simpleOutcome <- "unknown"
+samples$simpleOutcome <- "Unknown"
+# add Cohort to metadata
 samples$Cohort <- "PAC"
+# add delivery mode to metadata
+samples$delivery_mode <- "NA"
 
 samples_noHV <- samples %>%
   dplyr::filter(., !grepl('PAC0008|PAC0036|PAC0035|PAC0006|PAC0024|PAC0045|PAC0039|PAC0041', samplename)) %>% 
     dplyr::filter(., !grepl('PAC0025', samplename)) %>% 
-  dplyr::select(., samplename, simpleOutcome, Cohort, fetalSex = updatedFetalSex, gestationalAge, processGroup)
-
+  dplyr::select(., samplename, simpleOutcome, Cohort, fetalSex = updatedFetalSex, gestationalAge, delivery_mode) # remove processGroup because this is from the miRNA seq data
+# add RNASeq processGroup
+samples_noHV$processGroup <- "groupA"
 
 ```
 
@@ -119,15 +122,19 @@ outlierSamples <- c("PAC0211", "PAC0202")
 termPlacentaCounts <- termPlacentaCounts %>%
   dplyr::select(., -(outlierSamples))
 
-simpleMetadata <- read_csv("cleanData/simpleMetadata.csv")
+# read in the sample metadata and replace the fetal sex names so they are the same as the other metadata sheet
+simpleMetadata <- read_excel(here("cleanData/simpleMetadata_matched.xlsx")) %>% 
+  dplyr::arrange(., samplename) 
+simpleMetadata$fetalSex <- gsub("Male", "XY", simpleMetadata$fetalSex)
+simpleMetadata$fetalSex <- gsub("Female", "XX", simpleMetadata$fetalSex)
 
 # remove outlier sample from the sample metadata
 simpleMetadata <- simpleMetadata %>%
   dplyr::filter(., !grepl('PAC0211|PAC0202', samplename)) %>% 
-  dplyr::select(., samplename, simpleOutcome, Cohort, fetalSex, gestationalAge = gestationPlus)
+  dplyr::select(., samplename, simpleOutcome, Cohort, fetalSex, gestationalAge = gestationPlus, delivery_mode)
 
 # add processGroup to metadata
-simpleMetadata$processGroup <- "groupC"
+simpleMetadata$processGroup <- "groupB"
 simpleMetadata$gestationalAge <- as.integer(simpleMetadata$gestationalAge)
 
 ```
@@ -154,6 +161,9 @@ allMetadata <- rbind(samples_noHV, simpleMetadata) %>%
 
 # replace NAs with 0 after join.
 allCounts[is.na(allCounts)] <- 0
+
+# reduce any individual count less than five to zero
+allCounts[allCounts < 5] <- 0
 
 # check to establish if any miRNA have no expression across all samples
 table(rowSums(allCounts == 0) == nrow(allMetadata))
@@ -211,16 +221,7 @@ boxplot(lcpm, las = 2, col = col_B, main = "")
 title(main = "DGEList_groupB: Un-normalised data ",ylab = "Log-cpm") 
 # calculate normalisation factors and apply to the DGEList object
 DGEList_groupB <- calcNormFactors(DGEList_groupB, method = "TMM")
-# groupC
-# Plot the distribution of (low count filtered) counts prior to normalisation 
-nsamples <- ncol(DGEList_groupC)
-# set up colours for the density plots
-col_C <- colorRampPalette(brewer.pal(11,"Spectral"))(ncol(DGEList_groupC))
-lcpm <- cpm(DGEList_groupC, log = TRUE)
-boxplot(lcpm, las = 2, col = col_C, main = "")
-title(main = "DGEList_groupC: Un-normalised data ",ylab = "Log-cpm") 
-# calculate normalisation factors and apply to the DGEList object
-DGEList_groupC <- calcNormFactors(DGEList_groupC, method = "TMM")
+
 ```
 
 # Filter biological noise and plot
@@ -235,7 +236,7 @@ rawCpm_placenta_groupA <- cpm(DGEList_groupA)
 # new df of unfiltered log 2 cpm for the reduced DGEList
 rawlcpm_placenta_groupA <- cpm(DGEList_groupA, log = TRUE)
 # remove low expressed genes
-keep.exprs <- rowSums(rawCpm_placenta_groupA > 2.5) >= 14
+keep.exprs <- rowSums(rawCpm_placenta_groupA > 2.5) >= 34
 DGEList_groupA <- DGEList_groupA[keep.exprs,, keep.lib.sizes = FALSE]
 ## The density of log-CPM values for pre-filtered data 
 # (A) and post-filtered data 
@@ -281,7 +282,7 @@ rawCpm_placenta_groupB <- cpm(DGEList_groupB)
 # new df of unfiltered log 2 cpm for the reduced DGEList
 rawlcpm_placenta_groupB <- cpm(DGEList_groupB, log = TRUE)
 # remove low expressed genes
-keep.exprs <- rowSums(rawCpm_placenta_groupB > 2.5) >= 3
+keep.exprs <- rowSums(rawCpm_placenta_groupB > 2.5) >= 33
 DGEList_groupB <- DGEList_groupB[keep.exprs,, keep.lib.sizes = FALSE]
 ## The density of log-CPM values for pre-filtered data 
 # (A) and post-filtered data 
@@ -318,53 +319,6 @@ boxplot(cpm(DGEList_groupB, log = TRUE), las = 2, col = col_B, main = "")
 title(main = "DGEList_groupB: Normalised data",ylab = "Log-cpm")
 ```
 
-## DGEList_groupB
- 
-```{r filter_bionoise_C}
-# calculate the cpm value of a read count of 10 given the mean library size (to be used in the keep.genes)
-cpm(10, mean(DGEList_groupC$samples$lib.size))
-# new df of unfiltered cpm for the reduced DGEList
-rawCpm_placenta_groupC <- cpm(DGEList_groupC)
-# new df of unfiltered log 2 cpm for the reduced DGEList
-rawlcpm_placenta_groupC <- cpm(DGEList_groupC, log = TRUE)
-# remove low expressed genes
-keep.exprs <- rowSums(rawCpm_placenta_groupC > 2.5) >= 3
-DGEList_groupC <- DGEList_groupC[keep.exprs,, keep.lib.sizes = FALSE]
-## The density of log-CPM values for pre-filtered data 
-# (A) and post-filtered data 
-# (B) are shown for each sample. 
-## Dotted vertical lines mark the log-CPM of 1 threshold 
-# (equivalent to a CPM value of 2) used in the filtering step.
-nsamples <- ncol(DGEList_groupC)
-col <- brewer.pal(nsamples, "Paired")
-par(mfrow=c(1,2))
-plot(density(rawlcpm_placenta_groupC[,1]), col = col_B[1], lwd = 2, ylim = c(0, 0.20), las = 2,
-  main = "", xlab = "")
-title(main = "A. DGEList_groupC Unfiltered data", xlab = "Log-cpm") 
-abline(v = 1, lty = 3)
-for (i in 1:nsamples){
-  den <- density(rawlcpm_placenta_groupC[,i])
-  lines(den$x, den$y, col = col_C[i], lwd = 2)
-}
-#legend("topright", legend = samples$samplename, text.col = col, bty = "n")
-#dev.off()
-lcpm <- cpm(DGEList_groupC, log=TRUE)
-plot(density(lcpm[,1]), col = col_C[1], lwd = 2, ylim = c(0, 0.20), las = 2,
-  main = "", xlab = "")
-title(main = "B. DGEList_groupC Filtered data", xlab = "Log-cpm") 
-abline(v = 1, lty = 3)
-for (i in 1:nsamples){
-  den <- density(lcpm[,i])
-lines(den$x, den$y, col = col[i], lwd = 2)
-}
-#legend("topright", legend=samples$samplename, text.col=col, bty="n")
-#dev.off ()
-par(mfrow=c(1,1))
-# Distribution of normalised and filtered counts data
-boxplot(cpm(DGEList_groupC, log = TRUE), las = 2, col = col_C, main = "")
-title(main = "DGEList_groupC: Normalised data",ylab = "Log-cpm")
-```
-
 ## Combine DGElist objects
 
 ```{r combine}
@@ -373,18 +327,16 @@ combined_counts <- full_join(as.data.frame(DGEList_groupA$counts) %>%
                       tibble::rownames_to_column("gene"),
                     as.data.frame(DGEList_groupB$counts) %>% 
                       tibble::rownames_to_column("gene"), by = "gene") %>%  
-                    full_join(., as.data.frame(DGEList_groupC$counts) %>% 
-                      tibble::rownames_to_column("gene"), by = "gene") %>% 
   tibble::column_to_rownames("gene") %>% 
   as.matrix()
 # ensure the columns are ordered by assending sample name
 combined_counts <- combined_counts[,order(colnames(combined_counts),decreasing=FALSE)]
+# replace any NAs introduced by the join with zero
 combined_counts[is.na(combined_counts)] <- 0
 
 # new sample metadata which includes the library size info
 sampleMeta_norm <- rbind(DGEList_groupA$samples,
-                         DGEList_groupB$samples,
-                         DGEList_groupC$samples) %>% 
+                         DGEList_groupB$samples) %>% 
   arrange(., samplename)
 
 DGEList_norm <- DGEList(counts = combined_counts,
@@ -393,6 +345,7 @@ DGEList_norm <- DGEList(counts = combined_counts,
 plot(density(cor(DGEList_norm$counts)), lwd=3, main="Density plot filtered and normalised")
 
 cpm_norm <- cpm(DGEList_norm, log=FALSE)
+
 ```
 
 ## MDS of filtered and TMM normalised counts
@@ -424,10 +377,12 @@ cbind(x, y) %>%
        y = "DIM 2",
        x = "DIM 1") +
   theme_bw()
+
 ```
 
 ## Remove batch effects using covariates and design matrix
-  - the design matrix controls for gestationalAge only
+  - If we want to look at expression across these two sequencing batches we need to make sure we account for technical variances introduced because these runs were performed on different machines on different days
+  - the design matrix controls for gestationalAge - this is because gestational age is the biological signal we want to keep
 
 ```{r limmaRemoveBatchEffect}
 
@@ -441,7 +396,30 @@ correctedCounts_gestation <- limma::removeBatchEffect(cpm(DGEList_norm, log = TR
                                                    design = design_gestation, 
                                                    batch = sampleMeta_norm$processGroup)
 
-MDS <- plotMDS(correctedCounts_gestation, main = "MDS batch corrected counts")
+MDS_corrected <- plotMDS(correctedCounts_gestation, main = "MDS batch corrected counts")
+
+# pull out x and y
+x <- MDS_corrected$x
+y <- MDS_corrected$y  
+
+# plot with ggplot
+cbind(x, y) %>% 
+  as.data.frame() %>% 
+  tibble::rownames_to_column("samplename") %>% 
+  full_join(., sampleMeta_norm, by = "samplename") %>% 
+  ggplot() +
+  geom_point(aes(x = x,
+                 y = y,
+                 colour = processGroup,
+                 size = 6)) +
+  geom_text(aes(x = x,
+                y = y,
+                label = samplename,
+                colour = processGroup), vjust = -1) +
+  labs(title = "MDS plot batch corrected gene-level counts \nplacenta",
+       y = "DIM 2",
+       x = "DIM 1") +
+  theme_bw()
 
 ```
 
@@ -456,7 +434,7 @@ GOI <- "ENSG00000172270"
 # we will use this to add informtion to the y-axis lable on the plot
 gene_name <- "(BSG)"
 
-data.frame(cpm_norm) %>%
+data.frame(correctedCounts_gestation) %>%
   as.data.frame() %>% 
   tibble::rownames_to_column("gene") %>% 
   filter(., gene == GOI) %>% 
@@ -477,8 +455,421 @@ data.frame(cpm_norm) %>%
   theme(axis.text.x = element_text(angle = 90)) +
     theme(axis.text.x=element_text(colour="black")) +
     theme(axis.text.y=element_text(colour="black")) +
-  ylab(paste(GOI, gene_name, "CPM", sep = " ")) +
+  ylab(paste(GOI, gene_name, "log2 CPM", sep = " ")) +
   xlab("Gestational Age (weeks')") +
   labs(fill = "Fetal Sex")
+
+```
+
+# Differential expression analysis
+
+```{r differential Expression delivery mode only}
+
+DGEList_norm$samples <- mutate(DGEList_norm$samples, mode = ifelse(delivery_mode == "LSCS in labour", "LSCS_lab",
+                                                    ifelse(delivery_mode == "Operative vaginal", "op_vag",
+                                                           ifelse(delivery_mode == "Prelabout LSCS", "LSCS_pre",
+                                                                  ifelse(delivery_mode == "Unassisted vaginal", "unassist_vag", 
+                                                                         ifelse(delivery_mode == "NA", "none", NA))))))
+                                   
+                                   
+levels(DGEList_norm$samples$mode) <- c("LSCS_lab", "op_vag", "LSCS_pre", "unassist_vag", "none")
+DGEList_norm$samples$mode <- factor(DGEList_norm$samples$mode, c("unassist_vag", "LSCS_lab", "op_vag", "LSCS_pre", "none"))
+
+# design to test DE between LSCS in labour and pre-labour LSCS
+design_mode <- model.matrix(~0 + mode, data = DGEList_norm$samples)
+
+colnames(design_mode) <- levels(DGEList_norm$samples$mode)
+
+voom_mode <- voomWithQualityWeights(DGEList_norm, design_mode, plot=TRUE)
+
+fit_mode <- lmFit(voom_mode, design_mode)
+
+fit_mode <- eBayes(fit_mode)
+
+summary(decideTests(fit_mode)) # before FDR correction
+
+# establish the contrasts for the regression
+contrasts <- c("LSCS_lab-LSCS_pre", "op_vag-unassist_vag", "LSCS_lab-unassist_vag")
+
+# make the contrast matrix based on the contrasts above
+contrast_matrix <- makeContrasts(contrasts = contrasts, levels = design_mode)
+
+# fit a linear regression to the contrast questions
+fit_contrast <- contrasts.fit(fit_mode, contrast_matrix)
+
+fit_contrast <- eBayes(fit_contrast)
+
+# summary table of the contrast fit
+summary_fit_contrast <- summary(decideTests(fit_contrast, adjust.method="BH", p.value=0.05))
+
+topTable <- topTable(fit_contrast, coef = 1)
+
+
+```
+
+# Sex specific DE (for Mhyles)
+  - Here we look at the gene expression differences between delivery mode independently for placenta from male and female bearing pregnancies.
+  - I have chosen to use the limma::voom method here because there is a large variance in library depth for which _voom_ has been shown to perform the best
+  
+```{r sex specific DE delivery mode}
+
+
+DGEList_norm$samples <- mutate(DGEList_norm$samples, sex_mode = paste(fetalSex, mode, sep = "_"))
+
+DGEList_norm$samples$sex_mode <- factor(DGEList_norm$samples$sex_mode, c("XX_unassist_vag", "XY_unassist_vag", "XX_LSCS_lab", "XY_LSCS_lab", "XX_LSCS_pre", "XY_LSCS_pre", "XX_op_vag", "XY_op_vag", "XX_none", "XY_none"))
+
+design_sexMode <- model.matrix(~0 + sex_mode,
+                       data = DGEList_norm$samples)
+
+colnames(design_sexMode) <- levels(DGEList_norm$samples$sex_mode)
+
+voom_sexMode <- voomWithQualityWeights(DGEList_norm, design_sexMode, plot=TRUE)
+
+fit_sexMode <- lmFit(voom_sexMode, design_sexMode)
+
+fit_sexMode <- eBayes(fit_sexMode)
+
+summary(decideTests(fit_sexMode)) # before FDR correction
+
+contrast_sexMode <- makeContrasts(female_vaginal = XX_op_vag-XX_unassist_vag,
+                                  male_vaginal = XY_op_vag-XY_unassist_vag,
+                                  female_LSCS = XX_LSCS_lab-XX_LSCS_pre,
+                                  male_LSCS = XY_LSCS_lab-XY_LSCS_pre,
+                                  female_LSCSvVag = XX_LSCS_lab-XX_unassist_vag,
+                                  male_LSCSvVag = XY_LSCS_lab-XY_unassist_vag,
+                                  levels=design_sexMode)
+
+# fit a linear regression to the contrast questions
+fit_sexMode <- contrasts.fit(fit_sexMode, contrast_sexMode)
+
+# perform bayesian adjustment
+fit_sexMode <- eBayes(fit_sexMode)
+
+# summary table of the sexMode fit
+summary_fit_sexMode <- summary(decideTests(fit_sexMode,
+                                           adjust.method="fdr",
+                                           p.value=0.05))
+
+# all DE results for the female_vaginal comparison
+allTable_female_vaginal <- topTable(fit_sexMode,
+                             coef = 1,
+                             n = Inf,
+                             sort = "p")
+
+# only significant (after fdr correction) DE results for the female_vaginal comparison (XX_op_vag-XX_unassist_vag)
+topTable_female_vaginal <- topTable(fit_sexMode,
+                             coef = 1,
+                             n = Inf,
+                             sort = "p",
+                             p = 0.05,
+                             adjust.method = "fdr") # requires eBayes.
+
+# all DE results for the male_vaginal comparison
+allTable_male_vaginal <- topTable(fit_sexMode,
+                             coef = 2,
+                             n = Inf,
+                             sort = "p")
+
+# only significant (after fdr correction) DE results for the male_vaginal comparison
+topTable_male_vaginal <- topTable(fit_sexMode,
+                             coef = 2,
+                             n = Inf,
+                             sort = "p",
+                             p = 0.05,
+                             adjust.method = "fdr") # requires eBayes.
+
+# all DE results for the female_LSCS comparison
+allTable_female_LSCS <- topTable(fit_sexMode,
+                             coef = 3,
+                             n = Inf,
+                             sort = "p")
+
+# only significant (after fdr correction) DE results for the female_LSCS comparison
+topTable_female_LSCS <- topTable(fit_sexMode,
+                             coef = 3,
+                             n = Inf,
+                             sort = "p",
+                             p = 0.05,
+                             adjust.method = "fdr") # requires eBayes.
+
+# all DE results for the male_LSCS comparison
+allTable_male_LSCS <- topTable(fit_sexMode,
+                             coef = 4,
+                             n = Inf,
+                             sort = "p")
+
+# only significant (after fdr correction) DE results for the male_LSCS comparison
+topTable_male_LSCS <- topTable(fit_sexMode,
+                             coef = 4,
+                             n = Inf,
+                             sort = "p",
+                             p = 0.05,
+                             adjust.method = "fdr") # requires eBayes.
+
+# all DE results for the female_LSCSvVag comparison
+allTable_female_LSCSvVag <- topTable(fit_sexMode,
+                             coef = 5,
+                             n = Inf,
+                             sort = "p")
+
+# only significant (after fdr correction) DE results for the female_LSCSvVag comparison
+topTable_female_LSCSvVag <- topTable(fit_sexMode,
+                             coef = 5,
+                             n = Inf,
+                             sort = "p",
+                             p = 0.05,
+                             adjust.method = "fdr") # requires eBayes.
+
+# all DE results for the male_LSCSvVag comparison
+allTable_male_LSCSvVag <- topTable(fit_sexMode,
+                             coef = 6,
+                             n = Inf,
+                             sort = "p")
+
+# only significant (after fdr correction) DE results for the male_LSCSvVag comparison
+topTable_male_LSCSvVag <- topTable(fit_sexMode,
+                             coef = 6,
+                             n = Inf,
+                             sort = "p",
+                             p = 0.05,
+                             adjust.method = "fdr") # requires eBayes.
+
+```
+
+# Sex specific DE (for Fran)
+  - Here we look at the gene expression differences between early-mid, early/mid-term, and term PE-uncomp independently for placenta from male and female bearing pregnancies.
+  - I have chosen to use the limma::voom method here because there is a large variance in library depth for which _voom_ has been shown to perform the best
+  
+## Gestation pre and post
+  
+```{r sex specific DE gestation}
+
+# create a new column with the gestationalAge converted to a character vector
+DGEList_norm$samples <- mutate(DGEList_norm$samples, oxygen = ifelse(gestationalAge <= 10, "6_10",
+                                                                     ifelse(gestationalAge >= 11 & gestationalAge <= 23, "11_23",
+                                                                            ifelse(gestationalAge > 23, "term", NA))))
+# add the sex details
+DGEList_norm$samples <- mutate(DGEList_norm$samples, sex_GA = paste(fetalSex, oxygen, sep = "_"))
+
+# assign factor order for DE
+DGEList_norm$samples$sex_GA <- factor(DGEList_norm$samples$sex_GA, c("XX_term", "XY_term", "XX_11_23", "XY_11_23", "XY_6_10", "XX_6_10"))
+
+# her for the first time we are making comparisons across two batches so we need to include batch in the linear model
+design_sexGA <- model.matrix(~0 + sex_GA + processGroup,
+                             data = DGEList_norm$samples)
+
+colnames(design_sexGA) <- c("XX_term", "XY_term", "XX_11_23", "XY_11_23", "XY_6_10", "XX_6_10", "processGroupgroupB")
+
+voom_sexGA <- voomWithQualityWeights(DGEList_norm, design_sexGA, plot=TRUE)
+
+fit_sexGA <- lmFit(voom_sexGA, design_sexGA)
+
+fit_sexGA <- eBayes(fit_sexGA)
+
+summary(decideTests(fit_sexGA)) # before FDR correction
+
+contrast_sexGA <- makeContrasts(female_oxygen = XX_11_23-XX_6_10,
+                                  male_oxygen = XY_11_23-XY_6_10,
+                                  levels = design_sexGA)
+
+# fit a linear regression to the contrast questions
+fit_sexGA <- contrasts.fit(fit_sexGA, contrast_sexGA)
+
+# perform bayesian adjustment
+fit_sexGA <- eBayes(fit_sexGA)
+
+# summary table of the sexMode fit
+summary_fit_sexGA <- summary(decideTests(fit_sexGA,
+                                         adjust.method = "fdr",
+                                         p.value = 0.05))
+
+# all DE results for the female_oxygen comparison
+allTable_female_oxygen <- topTable(fit_sexGA,
+                             coef = 1,
+                             n = Inf,
+                             sort = "p")
+
+# only significant (after fdr correction) DE results for the female_oxygen comparison
+topTable_female_oxygen <- topTable(fit_sexGA,
+                             coef = 1,
+                             n = Inf,
+                             sort = "p",
+                             p = 0.05,
+                             adjust.method = "fdr") # requires eBayes.
+
+# all DE results for the male_oxygen comparison
+allTable_male_oxygen <- topTable(fit_sexGA,
+                             coef = 2,
+                             n = Inf,
+                             sort = "p")
+
+# only significant (after fdr correction) DE results for the male_oxygen comparison
+topTable_male_oxygen <- topTable(fit_sexGA,
+                             coef = 2,
+                             n = Inf,
+                             sort = "p",
+                             p = 0.05,
+                             adjust.method = "fdr") # requires eBayes.
+
+
+```
+
+```{r sex specific DE gestation}
+
+# create a new column with the gestationalAge converted to a character vector
+DGEList_norm$samples <- mutate(DGEList_norm$samples, term = ifelse(gestationalAge <= 23, "early",
+                                                                   ifelse(gestationalAge > 23, "term", NA)))
+# add the sex details
+DGEList_norm$samples <- mutate(DGEList_norm$samples, sex_term = paste(fetalSex, term, sep = "_"))
+
+# assign factor order for DE
+DGEList_norm$samples$sex_GA <- factor(DGEList_norm$samples$sex_GA, c("XX_early", "XY_early", "XX_term", "XY_term"))
+
+# her for the first time we are making comparisons across two batches so we need to include batch in the linear model
+design_sexTerm <- model.matrix(~0 + sex_term + processGroup,
+                             data = DGEList_norm$samples)
+
+colnames(design_sexTerm) <- c("XX_early", "XY_early", "XX_term", "XY_term", "processGroupgroupB")
+
+voom_sexTerm <- voomWithQualityWeights(DGEList_norm, design_sexTerm, plot=TRUE)
+
+fit_sexTerm <- lmFit(voom_sexTerm, design_sexTerm)
+
+fit_sexTerm <- eBayes(fit_sexTerm)
+
+summary(decideTests(fit_sexTerm)) # before FDR correction
+
+contrast_sexTerm <- makeContrasts(female_term= XX_term-XX_early,
+                                  male_term = XY_term-XY_early,
+                                  levels = design_sexTerm)
+
+# fit a linear regression to the contrast questions
+fit_sexTerm <- contrasts.fit(fit_sexTerm, contrast_sexTerm)
+
+# perform bayesian adjustment
+fit_sexTerm <- eBayes(fit_sexTerm)
+
+# summary table of the sexTerm fit
+summary_fit_sexTerm <- summary(decideTests(fit_sexTerm,
+                                         adjust.method = "fdr",
+                                         p.value = 0.05))
+
+# all DE results for the female_term comparison
+allTable_female_oxygen <- topTable(fit_sexGA,
+                             coef = 1,
+                             n = Inf,
+                             sort = "p")
+
+# only significant (after fdr correction) DE results for the female_term comparison
+topTable_female_term <- topTable(fit_sexTerm,
+                             coef = 1,
+                             n = Inf,
+                             sort = "p",
+                             p = 0.05,
+                             adjust.method = "fdr") # requires eBayes.
+
+# all DE results for the male_term comparison
+allTable_male_term <- topTable(fit_sexTerm,
+                             coef = 2,
+                             n = Inf,
+                             sort = "p")
+
+# only significant (after fdr correction) DE results for the male_term comparison
+topTable_male_term <- topTable(fit_sexTerm,
+                             coef = 2,
+                             n = Inf,
+                             sort = "p",
+                             p = 0.05,
+                             adjust.method = "fdr") # requires eBayes.
+
+
+```
+
+## PE
+
+```{r sex specific DE pathology}
+
+
+DGEList_norm$samples <- mutate(DGEList_norm$samples, sex_pathology = paste(fetalSex, simpleOutcome, sep = "_"))
+
+DGEList_norm$samples$sex_pathology <- factor(DGEList_norm$samples$sex_pathology, c("XX_Uncomplicated", "XY_Uncomplicated", "XY_Unknown", "XX_Unknown", "XY_PE", "XX_PE"))
+
+design_sexPathology <- model.matrix(~0 + sex_pathology,
+                       data = DGEList_norm$samples)
+
+colnames(design_sexPathology) <- levels(DGEList_norm$samples$sex_pathology)
+
+voom_sexPathology <- voomWithQualityWeights(DGEList_norm, design_sexPathology, plot=TRUE)
+
+fit_sexPathology <- lmFit(voom_sexPathology, design_sexPathology)
+
+fit_sexPathology <- eBayes(fit_sexPathology)
+
+summary(decideTests(fit_sexPathology)) # before FDR correction
+
+contrast_sexPathology <- makeContrasts(female_PE = XX_PE-XX_Uncomplicated,
+                                  male_PE = XY_PE-XY_Uncomplicated,
+                                  levels = design_sexPathology)
+
+# fit a linear regression to the contrast questions
+fit_sexPathology <- contrasts.fit(fit_sexPathology, contrast_sexPathology)
+
+# perform bayesian adjustment
+fit_sexPathology <- eBayes(fit_sexPathology)
+
+# summary table of the sexMode fit
+summary_fit_sexPathology <- summary(decideTests(fit_sexPathology,
+                                           adjust.method = "fdr",
+                                           p.value = 0.05))
+
+# all DE results for the female_PE comparison
+allTable_female_PE <- topTable(fit_sexPathology,
+                             coef = 1,
+                             n = Inf,
+                             sort = "p")
+
+# only significant (after fdr correction) DE results for the female_PE comparison
+topTable_female_PE <- topTable(fit_sexPathology,
+                             coef = 1,
+                             n = Inf,
+                             sort = "p",
+                             p = 0.05,
+                             adjust.method = "fdr") # requires eBayes.
+
+# all DE results for the female_PE comparison
+allTable_male_PE <- topTable(fit_sexPathology,
+                             coef = 2,
+                             n = Inf,
+                             sort = "p")
+
+# only significant (after fdr correction) DE results for the female_PE comparison
+topTable_male_PE <- topTable(fit_sexPathology,
+                             coef = 2,
+                             n = Inf,
+                             sort = "p",
+                             p = 0.05,
+                             adjust.method = "fdr") # requires eBayes.
+
+
+```
+
+```{r save tables}
+
+## Save the topTables for investigation by Mhyles
+# here make a list containing the objects to be written as excell files
+fileList <- lapply(ls(pattern = "^topTable_"), get)
+names(fileList) <- (ls(pattern = "^topTable_"))
+
+# make a vector of file names
+files <- c("topTable_female_LSCS", "topTable_female_LSCSvVag", "topTable_female_oxygen", "topTable_female_PE", "topTable_female_term", "topTable_female_vaginal", "topTable_male_LSCS", "topTable_male_LSCSvVag", "topTable_male_oxygen", "topTable_male_PE", "topTable_male_term", "topTable_male_vaginal")
+
+# here we are going to use the function `write.table` to save a new file for each of the topTable objects in our list of names
+for (i in seq_along(fileList)) {
+  write.table(fileList[i], file = paste0("cleanData/", names(fileList)[i], ".txt", sep = ""),
+              col.names= TRUE,
+              row.names = TRUE,
+              sep = "\t",
+              quote = FALSE)
+}
 
 ```
